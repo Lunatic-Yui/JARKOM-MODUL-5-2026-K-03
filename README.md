@@ -7,6 +7,9 @@
 | Dafa Ridho Zhafif             | 5027251129 | No 1 - 15       |
 | Yovi Prayudya Rizky Ramadhani | 5027251107 | No 16 - 20      |
 
+Link file: [GNS3-k03](./K-03-MODUL-5.gns3project)
+CSV file: [VLSM-K03](./VLSM_K-03_Modul5.csv)
+
 ---
 
 ## Ringkasan Proyek: Operation Geofront (Tokyo-3, 2015)
@@ -597,3 +600,289 @@ iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
    - Output `iptables -L INPUT -n -v --line-numbers` pada `Tokyo3-Core` membuktikan Rule 1 (`ACCEPT`) menangani `30 pkts` dan counter Rule 2 (`DROP`) naik menjadi **`20 pkts` (`1680 bytes`)**.
 2. **Uji Ping Biasa dengan Jeda Minimal 3 Detik (`ping -i 3 -c 4 10.65.4.106`):**
    - Seluruh 4 paket berhasil dijawab (**0% packet loss**) karena laju 1 paket per 3 detik berada jauh di bawah batas 5 paket per detik.
+
+
+### 16.  Pencuri yang mencoba setiap pintu: dari Switch-Lab, Dummy-Plug mengetuk port sensitif Tokyo3-Core satu per satu seperti pencuri. Ritsuko ingin tahu setiap percobaannya, dan pintunya harus dibanting. Setiap koneksi TCP dari Dummy-Plug ke port 22, 23, dan 3306 di Tokyo3-Core harus dicatat di log dengan prefix huruf besar SCAN-NERV:, lalu ditolak seketika. Port 80 dan 8080 tetap bisa diakses, dan klien lain tidak boleh terganggu. Buktikan nc -w dari Dummy-Plug ke port 22, 23, dan 3306 langsung ditolak, dan ke port 80 dan 8080 berhasil. Tunjukkan counter rule pencatatan, karena log kernel sering tidak terlihat di container.
+
+Jadi pada no 16 ini intinya adalah memasang alarm pada `Tokyo3-Core` untuk node `Dummy-Plug` dan mencatat ke log dengan prefix `SCAN-NERV` pada port 22, 23, dan 3306. Setelah dicatat ke log, koneksinya bakal di tolak. Untuk Scriptnya:
+
+Scriptnya kurang lebih seperti berikut
+
+```sh
+#!/bin/bash
+DP=10.65.4.51
+
+iptables -N SCAN 2>/dev/null || true
+iptables -F SCAN
+iptables -A SCAN -p tcp -m multiport --dports 22,23,3306 \
+  -j LOG --log-prefix "SCAN-NERV: " --log-level 4
+iptables -A SCAN -p tcp -m multiport --dports 22,23,3306 \
+  -j REJECT --reject-with tcp-reset
+
+iptables -C INPUT -s $DP -p tcp -j SCAN 2>/dev/null || \
+  iptables -I INPUT 1 -s $DP -p tcp -j SCAN
+```
+
+lalu dijalankan pada `Tokyo3-Core` setelah itu jalankan command berikut:
+
+```
+for p in 22 23 3306 80 8080; do nc -v -z -w 3 10.65.4.106 $p; echo "port $p exit=$?"; done
+```
+
+pada node Dummy-Plug. Lalu hasilnya sebagai berikut:
+
+![image](./assets/jawaban/result-soal-16-tokyo3.png)
+
+![image](./assets/jawaban/result-soal-16-Dummy.png)
+
+woops kelupaan buat nyalain beberapa script. Ini hasilnya:
+
+![image](./assets/jawaban/revisi/16-dummy.png)
+
+![image](./assets/jawaban/revisi/16-tokyo.png)
+
+### 17. Sihir hitam di jalur paket: Ritsuko meninggalkan memo di meja Gendo. Paket dari Casper ke Zeruel tidak pernah sampai ke Zeruel, karena ada router yang diam-diam mengalihkannya ke tempat lain. "Cari saja router yang menjadi gateway Switch-Terminal." Gendo menyuruhmu meniru router yang diam-diam itu untuk menjebak siapa pun. Di Fuyutsuki, alihkan setiap koneksi TCP dari Magi-Casper ke Zeruel supaya sampai di Pen-Pen. Casper tidak boleh sadar. Balasan yang ia terima harus tetap terlihat datang dari Zeruel. Ping tidak dialihkan. Nyalakan listener port 9000 di Pen-Pen dan Zeruel. Dari Casper, kirim pesan ke IP Zeruel port 9000. Buktikan pesan itu muncul di Pen-Pen, bukan di Zeruel. Tunjukkan juga tabel conntrack di Fuyutsuki.
+
+Jadi yang dimaksud oleh soal 17 adalah koneksi TCP dari Casper (10.65.4.58) ke Zeruel (10.65.4.82) dibelokkan ke Pen-Pen (10.65.3.194), tanpa Casper sadar dan ping tidak dialihkan. Jadi scriptnya berikut
+
+```sh
+#!/bin/bash
+R="-s 10.65.4.58 -d 10.65.4.82 -p tcp -j DNAT --to-destination 10.65.3.194"
+iptables -t nat -C PREROUTING $R 2>/dev/null || iptables -t nat -A PREROUTING $R
+```
+
+lalu check pakai `iptables -t nat -S PREROUTING` agar `-A PREROUTING -s 10.65.4.58/32 -d 10.65.4.82/32 -p tcp -j DNAT --to-destination 10.65.3.194.` itu muncul. Kemudian pasang `nc -v -l 9000` pada pen-pen dan zeruel. Kirim codenya sebagai berikut
+
+`echo "nyaho" | nc -w 3 10.65.4.82 9000` maka hasilnya sebagai berikut:
+
+![image](./assets/jawaban/sebelum.png)
+
+![image](./assets/jawaban/sesudah.png)
+
+Lalu check di `fuyutski` dengan command:
+
+```
+iptables -t nat -L PREROUTING -v -n
+conntrack -L -p tcp --dport 9000
+```
+
+### 18. Gerbang Monolith dan Radar: Monolith dan Radar menyimpan rahasia terbesar NERV, dan Shigeru menjaganya tanpa kompromi. Pasang aturan di Shigeru. Node di dalam zona boleh memulai koneksi ke mana saja, dan balasannya tetap sampai. Node di luar zona tidak boleh memulai koneksi ke dalam zona. Satu pengecualian: ping dari subnet Terminal boleh masuk. Tolak berdasarkan arah datangnya, yaitu semua yang datang dari sisi Shigeru yang menghadap Gendo. Jangan menulis subnet luar satu per satu, supaya subnet baru langsung ikut terblokir. Buktikan ping Casper ke Zeruel berhasil, sedangkan ping Lilith ke Zeruel gagal.
+
+Jadi pada no 18 ini si shigeru sebagai satpam menjaga koneksi dari luar. Jadi kalau misal mengarah ke node lain (selain dalam zona) dari luar zona itu gk boleh tapi dalam zona itu boleh. Akan tetapi ping subnet Terminal itu boleh masuk. Kurang lebih scriptnya sebagai berikut
+
+```sh
+#!/bin/bash
+UP=eth0
+TERMINAL=10.65.4.56/29
+
+iptables -N ZONA 2>/dev/null || true
+iptables -F ZONA
+iptables -A ZONA -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A ZONA -s $TERMINAL -p icmp --icmp-type echo-request -j ACCEPT
+iptables -A ZONA -j DROP
+
+iptables -C FORWARD -i $UP -j ZONA 2>/dev/null || iptables -I FORWARD 1 -i $UP -j ZONA
+```
+
+hasilnya sebagai berikut
+
+![image](./assets/jawaban/result-18-script.png)
+
+maka hasilnya kalau misal di ping:
+
+![image](./assets/jawaban/result-18.png)
+
+### 19. Hukuman untuk sang pengkhianat: hitung mundur tinggal beberapa menit. Armisael tidak boleh lagi bicara dengan siapa pun, tapi Zeruel di sebelahnya tidak boleh ikut terhukum. Blokir semua lalu lintas masuk dan keluar Armisael, termasuk ke gateway dan tetangga satu switch. Isolasi tidak boleh dikerjakan di dalam Armisael, karena pengkhianat tidak bisa dipercaya. Untuk uji nc, nyalakan listener TCP 9000 di Armisael, Zeruel, dan Lilith. Ke Seele pakai TCP 53. Buktikan ping dan nc dari Armisael ke Seele, Zeruel, dan Lilith gagal. Buktikan ping dan nc dari Zeruel ke Seele dan Lilith berhasil.
+
+Maksud soalnya sebagai berikut:
+Armisael harus terputus total: ping, nc, gateway, dan tetangga satu switch. Zeruel tidak boleh ikut terputus. Karena Armisael dan Zeruel satu switch, trafik mereka tidak lewat Shigeru, dan isolasi tidak boleh dikerjakan di dalam Armisael. Jadi isolasinya dipasang di link Armisael ke Switch-Monolith. Scriptnya kurang lebih:
+
+```sh
+#!/bin/bash
+# pakai: sh 19.sh listen   (di Armisael, Zeruel, Lilith, Spy)
+#        sh 19.sh test     (di Armisael dan Zeruel)
+SPY=10.65.4.102
+ZERUEL=10.65.4.82
+LILITH=10.65.4.74
+NODE=$(hostname)
+
+if command -v nc.traditional >/dev/null; then
+  LISTEN="nc.traditional -l -p"
+else
+  LISTEN="nc -l"
+fi
+
+check() {  # $1=nama $2=ip $3=port
+  if ping -c 2 -W 2 $2 >/dev/null 2>&1; then P=BERHASIL; else P=GAGAL; fi
+  if nc -z -w 3 $2 $3 >/dev/null 2>&1; then N=BERHASIL; else N=GAGAL; fi
+  echo "$NODE -> $1 ($2): ping=$P  nc:$3=$N"
+}
+
+case "$1" in
+  listen)
+    case "$NODE" in
+      Spy|spy) PORT=53 ;;
+      *)       PORT=9000 ;;
+    esac
+    pkill -f "while true; do $LISTEN $PORT" 2>/dev/null
+    nohup sh -c "while true; do $LISTEN $PORT >/dev/null 2>&1; sleep 0.2; done" >/dev/null 2>&1 &
+    echo "listener $PORT aktif di $NODE"
+    ;;
+  test)
+    case "$NODE" in
+      Armisael|armisael)
+        check Spy    $SPY    53
+        check Zeruel $ZERUEL 9000
+        check Lilith $LILITH 9000 ;;
+      Zeruel|zeruel)
+        check Spy    $SPY    53
+        check Lilith $LILITH 9000 ;;
+    esac ;;
+esac
+```
+
+Berikut hasilnya kalau pakai listen:
+
+![image](./assets/jawaban/result-19-listen.png)
+
+nah lalu bisa menggunakan command `./19.sh test` untuk bisa mengetahui apakah pingnya berhasil atau tidak. Hasilnya sebagai berikut
+
+![image](./assets/jawaban/result-19.armi&zeru.png)
+
+namun apakah sebegitu aja? masih belum. Karena soal meminta untuk `Armisael` terisolasi maka dipasang filter `packet loss`nya menjadi 100%. Berikut hasilnya
+
+![image](./assets/jawaban/armi-19.png)
+
+![image](./assets/jawaban/filter.png)
+
+### 20. Uji kebakaran Geofront: NERV harus bisa dibangun ulang dengan cepat. Pilih tiga node sendiri, minimal satu router. Di tiap node, simpan dulu rule dengan iptables-save ke /root/<nama>.rules. Lalu hapus semua rule iptables termasuk tabel nat, dan hapus rute yang kamu tambahkan sendiri. Pulihkan rule dengan iptables-restore, dan pulihkan rute dengan /root/<nama>.sh. Lakukan pemulihan itu dua kali berturut-turut. Hasilnya harus sama: rule dan rute tidak dobel, dan node berfungsi seperti semula. Buktikan jumlah baris iptables -S dan iptables -t nat -S sama setelah pemulihan pertama dan kedua. Buktikan juga node itu berfungsi lagi.
+
+Inti dari soal ini adalah menyimpan rule-rule pada beberapa node, lalu menghacurkannya, kemudia merestore kembali hasil dari penyimpanannya itu. Untuk itu kita mulai dari fuyutsuki terlebih dahulu
+
+![image](./assets/jawaban/result-20-in-fuyut-before.png)
+
+lalu hancurkan
+
+![image](./assets/jawaban/result-20-penghancuran-in-fuyut.png)
+
+Pemulihan:
+
+![image](./assets/jawaban/result-20-restore-fuyut.png)
+
+Nah pada script ini dia menyimpan hasil natnya dari no 17 -> lalu memasang pada rules yang sudah terpasang -> dan menyimpannya pada `fuyutsuki.rules`. Lalu ketika mau menghancurkan -> beberapa natnya dihapus -> lalu restore kembali dan provenya adalah menggunakan `magi-casper` sebagai buktinya. Provenya:
+
+`echo "nyaho" | nc -w 3 10.65.4.82 9000`
+
+Selanjutnya pada shigeru. Kurang lebih sama, hasilnya sebagai berikut
+
+Sebelum dihancurkan:
+
+![image](./assets/jawaban/result-20-shigeru-before.png)
+
+Saat dihancurkan:
+
+![image](./assets/jawaban/result-20-shigeru-destroy.png)
+
+Restore:
+
+![image](./assets/jawaban/result-20-shigeru-restore.png)
+
+Lalu selanjutnya yang terakhir, GENDO:
+
+Sebelum dihancurkan:
+
+![image](./assets/jawaban/result-20-gendo-before.png)
+
+Destroy:
+
+![image](./assets/jawaban/result-20-gendo-destroy.png)
+
+Restore:
+
+```
+root@Gendo:~# ./20.sh restore
+dipulihkan
+root@Gendo:~# ./20.sh count
+iptables -S       : 10 baris
+iptables -t nat -S: 5 baris
+default via 192.168.122.1 dev eth0 metric 8082
+10.65.0.0/23 via 10.65.4.118 dev eth3
+10.65.2.0/24 via 10.65.4.114 dev eth2
+10.65.3.0/25 via 10.65.4.118 dev eth3
+10.65.3.128/26 via 10.65.4.166 dev eth7
+10.65.3.192/27 via 10.65.4.146 dev eth4
+10.65.3.224/27 via 10.65.4.114 dev eth2
+10.65.4.0/27 via 10.65.4.118 dev eth3
+10.65.4.32/28 via 10.65.4.118 dev eth3
+10.65.4.48/29 via 10.65.4.166 dev eth7
+10.65.4.56/29 via 10.65.4.146 dev eth4
+10.65.4.64/29 via 10.65.4.150 dev eth5
+10.65.4.72/29 via 10.65.4.146 dev eth4
+10.65.4.80/28 via 10.65.4.158 dev eth6
+10.65.4.96/30 via 10.65.4.166 dev eth7
+10.65.4.100/30 via 10.65.4.170 dev eth8
+10.65.4.104/30 dev eth1 proto kernel scope link src 10.65.4.105
+10.65.4.108/30 via 10.65.4.118 dev eth3
+10.65.4.112/30 dev eth2 proto kernel scope link src 10.65.4.113
+10.65.4.116/30 dev eth3 proto kernel scope link src 10.65.4.117
+10.65.4.120/30 via 10.65.4.166 dev eth7
+10.65.4.124/30 via 10.65.4.146 dev eth4
+10.65.4.128/30 via 10.65.4.114 dev eth2
+10.65.4.132/30 via 10.65.4.118 dev eth3
+10.65.4.136/30 via 10.65.4.118 dev eth3
+10.65.4.140/30 via 10.65.4.166 dev eth7
+10.65.4.144/30 dev eth4 proto kernel scope link src 10.65.4.145
+10.65.4.148/30 dev eth5 proto kernel scope link src 10.65.4.149
+10.65.4.152/30 via 10.65.4.146 dev eth4
+10.65.4.156/30 dev eth6 proto kernel scope link src 10.65.4.157
+10.65.4.160/30 via 10.65.4.158 dev eth6
+10.65.4.164/30 dev eth7 proto kernel scope link src 10.65.4.165
+10.65.4.168/30 dev eth8 proto kernel scope link src 10.65.4.169
+192.168.122.0/24 dev eth0 proto kernel scope link src 192.168.122.15
+root@Gendo:~# ./20.sh restore
+dipulihkan
+root@Gendo:~# ./20.sh count
+iptables -S       : 10 baris
+iptables -t nat -S: 5 baris
+default via 192.168.122.1 dev eth0 metric 8082
+10.65.0.0/23 via 10.65.4.118 dev eth3
+10.65.2.0/24 via 10.65.4.114 dev eth2
+10.65.3.0/25 via 10.65.4.118 dev eth3
+10.65.3.128/26 via 10.65.4.166 dev eth7
+10.65.3.192/27 via 10.65.4.146 dev eth4
+10.65.3.224/27 via 10.65.4.114 dev eth2
+10.65.4.0/27 via 10.65.4.118 dev eth3
+10.65.4.32/28 via 10.65.4.118 dev eth3
+10.65.4.48/29 via 10.65.4.166 dev eth7
+10.65.4.56/29 via 10.65.4.146 dev eth4
+10.65.4.64/29 via 10.65.4.150 dev eth5
+10.65.4.72/29 via 10.65.4.146 dev eth4
+10.65.4.80/28 via 10.65.4.158 dev eth6
+10.65.4.96/30 via 10.65.4.166 dev eth7
+10.65.4.100/30 via 10.65.4.170 dev eth8
+10.65.4.104/30 dev eth1 proto kernel scope link src 10.65.4.105
+10.65.4.108/30 via 10.65.4.118 dev eth3
+10.65.4.112/30 dev eth2 proto kernel scope link src 10.65.4.113
+10.65.4.116/30 dev eth3 proto kernel scope link src 10.65.4.117
+10.65.4.120/30 via 10.65.4.166 dev eth7
+10.65.4.124/30 via 10.65.4.146 dev eth4
+10.65.4.128/30 via 10.65.4.114 dev eth2
+10.65.4.132/30 via 10.65.4.118 dev eth3
+10.65.4.136/30 via 10.65.4.118 dev eth3
+10.65.4.140/30 via 10.65.4.166 dev eth7
+10.65.4.144/30 dev eth4 proto kernel scope link src 10.65.4.145
+10.65.4.148/30 dev eth5 proto kernel scope link src 10.65.4.149
+10.65.4.152/30 via 10.65.4.146 dev eth4
+10.65.4.156/30 dev eth6 proto kernel scope link src 10.65.4.157
+10.65.4.160/30 via 10.65.4.158 dev eth6
+10.65.4.164/30 dev eth7 proto kernel scope link src 10.65.4.165
+10.65.4.168/30 dev eth8 proto kernel scope link src 10.65.4.169
+192.168.122.0/24 dev eth0 proto kernel scope link src 192.168.122.15
+root@Gendo:~#
+```
+
+Gk bisa ku ss karena kepanjangan. Tapi untuk hasilnya:
+
+![image](./assets/jawaban/result-20-gendo-restore.png)
+
+Jadi seperti itu
